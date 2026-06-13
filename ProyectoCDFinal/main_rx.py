@@ -63,7 +63,7 @@ def receive():
             break
 
         gray    = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, method = find_fiducials_robust(gray)
+        corners, method = find_fiducials_robust(gray, bgr=frame, debug=debug_mode)
         display = frame.copy()
 
         # --- HUD ---

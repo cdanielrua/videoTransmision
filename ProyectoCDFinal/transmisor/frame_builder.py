@@ -30,39 +30,57 @@ def get_data_cells():
                 cells.append((row, col))
     return cells
 
-def build_frame(symbols, frame_number=0, total_frames=1):
-    # Canvas gris medio
-    frame = np.full((FRAME_H, FRAME_W), 128, dtype=np.uint8)
+def build_frame(symbols: np.ndarray, frame_number: int = 0,
+                total_frames: int = 1) -> np.ndarray:
+    # Canvas negro en BGR
+    frame = np.zeros((FRAME_H, FRAME_W, 3), dtype=np.uint8)
     
-    fid_px = FIDUCIAL_SIZE * CELL_SIZE
-    fid_marker = build_fiducial_marker(FIDUCIAL_SIZE)
-    
-    # PRIMERO los datos (para que los fiduciales los sobreescriban después)
+    # Fondo gris medio solo en zona de datos
+    frame[:, :] = (64, 64, 64)
+
+    # --- PRIMERO los datos ---
     data_cells = get_data_cells()
     n = min(len(symbols), len(data_cells))
     for i in range(n):
         row, col = data_cells[i]
         y, x = row * CELL_SIZE, col * CELL_SIZE
-        frame[y:y+CELL_SIZE, x:x+CELL_SIZE] = symbols[i]
-    
-    # Fila de pilotos encima de los datos
+        val = int(symbols[i])
+        frame[y:y+CELL_SIZE, x:x+CELL_SIZE] = (val, val, val)
+
+    # --- Fila de pilotos blanco/negro ---
     for col in range(GRID_COLS):
         val = 255 if col % 2 == 0 else 0
         y = PILOT_ROW * CELL_SIZE
         x = col * CELL_SIZE
-        frame[y:y+CELL_SIZE, x:x+CELL_SIZE] = val
-    
-    # ÚLTIMO los fiduciales — siempre encima de todo
-    frame[0:fid_px, 0:fid_px] = fid_marker                            # TL
-    frame[0:fid_px, FRAME_W-fid_px:FRAME_W] = fid_marker              # TR
-    frame[FRAME_H-fid_px:FRAME_H, 0:fid_px] = fid_marker              # BL
-    frame[FRAME_H-fid_px:FRAME_H, FRAME_W-fid_px:FRAME_W] = fid_marker  # BR
-    
-    frame_bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-   # cv2.putText(frame_bgr, f"F{frame_number}/{total_frames}",
-    #            (FRAME_W//2 - 30, FRAME_H - 5),
-     #           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,255,0), 1)
-    return frame_bgr
+        frame[y:y+CELL_SIZE, x:x+CELL_SIZE] = (val, val, val)
+
+    # --- ÚLTIMO: fiduciales en verde brillante ---
+    fid_px = FIDUCIAL_SIZE * CELL_SIZE
+    fid    = _build_fiducial_color(FIDUCIAL_SIZE)
+    frame[0:fid_px,            0:fid_px           ] = fid  # TL
+    frame[0:fid_px,            FRAME_W-fid_px:FRAME_W] = fid  # TR
+    frame[FRAME_H-fid_px:FRAME_H, 0:fid_px        ] = fid  # BL
+    frame[FRAME_H-fid_px:FRAME_H, FRAME_W-fid_px:FRAME_W] = fid  # BR
+
+    return frame
+
+
+def _build_fiducial_color(size_cells: int) -> np.ndarray:
+    """
+    Fiducial en color BGR:
+    - Borde exterior: negro
+    - Anillo medio:   verde brillante (0, 255, 0)
+    - Centro:         negro
+    Inconfundible con los datos en escala de grises.
+    """
+    s  = size_cells * CELL_SIZE
+    c  = CELL_SIZE
+    c2 = 2 * CELL_SIZE
+
+    marker = np.zeros((s, s, 3), dtype=np.uint8)        # todo negro
+    marker[c:s-c,   c:s-c  ] = (0, 255, 0)              # anillo verde
+    marker[c2:s-c2, c2:s-c2] = (0,   0, 0)              # centro negro
+    return marker
 
 def cells_capacity():
     return len(get_data_cells())
