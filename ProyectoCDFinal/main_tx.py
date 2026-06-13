@@ -7,7 +7,7 @@ import numpy as np
 import time
 from transmisor.encoder import text_to_bits
 from transmisor.frame_builder import build_frame, get_data_cells
-from common.protocol import build_packet
+from common.protocol import build_packet, payload_capacity
 from common.config import *
 
 
@@ -29,11 +29,12 @@ def build_end_frame() -> np.ndarray:
 def text_to_frames(text: str):
     data_cells             = get_data_cells()
     total_cells            = len(data_cells)
-    header_syms            = 80
-    payload_syms           = total_cells - header_syms
-    payload_bits_per_frame = payload_syms // 2
+    payload_bits_per_frame = payload_capacity(total_cells)
 
-    all_bits = text_to_bits(text)
+    # Terminador nulo (0x00): marca el fin real del mensaje para que el
+    # receptor pueda distinguir datos de relleno en el último frame.
+    all_bits = np.concatenate([text_to_bits(text),
+                                np.zeros(8, dtype=np.uint8)])
     print(f"Texto           : {len(text)} caracteres → {len(all_bits)} bits")
     print(f"Capacidad/frame : {payload_bits_per_frame} bits")
 
@@ -47,6 +48,9 @@ def text_to_frames(text: str):
 
     frames = []
     for seq, chunk in enumerate(chunks):
+        if len(chunk) < payload_bits_per_frame:
+            chunk = np.pad(chunk, (0, payload_bits_per_frame - len(chunk)),
+                           constant_values=0)
         symbols = build_packet(seq, total, chunk)
         if len(symbols) < total_cells:
             symbols = np.pad(symbols, (0, total_cells - len(symbols)),
@@ -56,7 +60,8 @@ def text_to_frames(text: str):
     return frames
 
 
-def show_frame(frame_bgr, screen_w, screen_h):
+def display(frame_bgr, screen_w, screen_h, wait_ms):
+    """Muestra el frame y retorna la tecla presionada (o 255 si ninguna)."""
     scale  = min(screen_w / FRAME_W, screen_h / FRAME_H)
     new_w  = int(FRAME_W * scale)
     new_h  = int(FRAME_H * scale)
@@ -67,7 +72,72 @@ def show_frame(frame_bgr, screen_w, screen_h):
     y_off  = (screen_h - new_h) // 2
     canvas[y_off:y_off+new_h, x_off:x_off+new_w] = scaled
     cv2.imshow("Transmisor", canvas)
-    cv2.waitKey(1)
+    return cv2.waitKey(wait_ms) & 0xFF
+
+
+def _control(key):
+    """Traduce una tecla a una señal de control ('quit'/'restart'/None)."""
+    if key == ord('q'):
+        return 'quit'
+    if key == ord('r'):
+        return 'restart'
+    return None
+
+
+def send_cycle(data_frames, preamble, end_frame, screen_w, screen_h, text):
+    """Envía un ciclo completo: preámbulo + datos + fin.
+
+    Retorna 'quit', 'restart' o 'done'.
+    """
+    frame_ms = int(FRAME_DURATION * 1000)
+
+    # Preámbulo de sincronización
+    print("Enviando preámbulo...")
+    for i in range(PREAMBLE_FRAMES):
+        ctrl = _control(display(preamble, screen_w, screen_h, frame_ms))
+        if ctrl:
+            return ctrl
+        print(f"  Preámbulo {i+1}/{PREAMBLE_FRAMES}")
+
+    # ── Tiempo inicia aquí ──
+    start = time.time()
+
+    # Frames de datos
+    print("Transmitiendo datos...")
+    for seq, frame in enumerate(data_frames):
+        ctrl = _control(display(frame, screen_w, screen_h, frame_ms))
+        if ctrl:
+            return ctrl
+        print(f"  ▶ Frame {seq+1}/{len(data_frames)}")
+
+    # Repetir últimos 2 frames 3 veces para asegurar recepción
+    print("  Repitiendo últimos frames...")
+    for frame in data_frames[-2:]:
+        for _ in range(3):
+            ctrl = _control(display(frame, screen_w, screen_h, frame_ms))
+            if ctrl:
+                return ctrl
+
+    # Pausa antes del fin (mantiene la última imagen en pantalla)
+    ctrl = _control(display(data_frames[-1], screen_w, screen_h, frame_ms * 2))
+    if ctrl:
+        return ctrl
+
+    # Frame de fin — muchas repeticiones
+    print("  Enviando fin...")
+    for _ in range(6):
+        ctrl = _control(display(end_frame, screen_w, screen_h, frame_ms))
+        if ctrl:
+            return ctrl
+
+    elapsed = time.time() - start
+    print(f"\n{'='*40}")
+    print(f"Transmisión completada")
+    print(f"Frames          : {len(data_frames)}")
+    print(f"Tiempo (datos)  : {elapsed:.2f}s")
+    print(f"Throughput      : {len(text)*8/elapsed:.0f} bps")
+    print(f"{'='*40}")
+    return 'done'
 
 
 def transmit(text: str):
@@ -86,59 +156,24 @@ def transmit(text: str):
     print("[ESPACIO] iniciar  |  [Q] cancelar\n")
 
     while True:
-        show_frame(preamble, screen_w, screen_h)
-        key = cv2.waitKey(100) & 0xFF
+        key = display(preamble, screen_w, screen_h, 100)
         if key == ord(' '):
             break
         elif key == ord('q'):
             cv2.destroyAllWindows()
             return
 
-    # Preámbulo de sincronización
-    print("Enviando preámbulo...")
-    for i in range(PREAMBLE_FRAMES):
-        show_frame(preamble, screen_w, screen_h)
-        time.sleep(FRAME_DURATION)
-        print(f"  Preámbulo {i+1}/{PREAMBLE_FRAMES}")
+    print("\nTransmisión continua iniciada. [R] reiniciar  |  [Q] salir\n")
 
-    # ── Tiempo inicia aquí ──
-    start = time.time()
-
-    # Frames de datos
-    print("Transmitiendo datos...")
-    for seq, frame in enumerate(data_frames):
-        show_frame(frame, screen_w, screen_h)
-        time.sleep(FRAME_DURATION)
-        print(f"  ▶ Frame {seq+1}/{len(data_frames)}")
-
-    # Repetir últimos 2 frames 3 veces para asegurar recepción
-    print("  Repitiendo últimos frames...")
-    for frame in data_frames[-2:]:
-        for _ in range(3):
-            show_frame(frame, screen_w, screen_h)
-            time.sleep(FRAME_DURATION)
-
-    # Pausa antes del fin
-    time.sleep(FRAME_DURATION * 2)
-
-    # Frame de fin — muchas repeticiones
-    print("  Enviando fin...")
-    for _ in range(6):
-        show_frame(end_frame, screen_w, screen_h)
-        time.sleep(FRAME_DURATION)
-
-    elapsed = time.time() - start
-    print(f"\n{'='*40}")
-    print(f"Transmisión completada")
-    print(f"Frames          : {len(data_frames)}")
-    print(f"Tiempo (datos)  : {elapsed:.2f}s")
-    print(f"Throughput      : {len(text)*8/elapsed:.0f} bps")
-    print(f"{'='*40}")
-    print("[Q] para cerrar")
-
+    # ── Loop continuo: reinicia automáticamente al terminar cada ciclo ──
     while True:
-        if cv2.waitKey(100) & 0xFF == ord('q'):
+        result = send_cycle(data_frames, preamble, end_frame,
+                            screen_w, screen_h, text)
+        if result == 'quit':
             break
+        if result == 'restart':
+            print("\n↺ Reinicio solicitado — reenviando desde el preámbulo\n")
+
     cv2.destroyAllWindows()
 
 

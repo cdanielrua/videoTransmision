@@ -1,0 +1,18 @@
+Resumen
+Causa raíz del bug del último frame (common/protocol.py, main_tx.py): el último chunk de texto era más corto que payload_bits_per_frame, así que build_packet generaba menos símbolos de los necesarios y text_to_frames rellenaba el resto con gris 128 (ambiguo). En recepción, parse_packet decodificaba ese relleno como bits de payload adicionales "basura", por lo que payload_clean quedaba más largo que el chunk original enviado → el CRC8 nunca coincidía → el último frame se reportaba siempre como "CRC error", sin importar cuánto tiempo se mostrara.
+
+Fix aplicado (sin cambiar el tamaño del header del protocolo):
+
+common/protocol.py: nuevo helper payload_capacity(total_cells).
+main_tx.py text_to_frames: se agrega un byte terminador 0x00 al final del mensaje y el último chunk se rellena con ceros de bits (no símbolos grises) hasta payload_bits_per_frame, así todos los frames —incluido el último— quedan de tamaño fijo y el CRC siempre coincide.
+receptor/decoder.py bits_to_text: se detiene al encontrar el byte nulo terminador (en vez de imprimir ?).
+main_rx.py _reconstruct: un frame perdido/CRC-fallido se rellena con PAYLOAD_BITS ceros (antes eran 8), preservando la alineación de los frames siguientes.
+Verifiqué esto con un script offline (sin cámara/cv2): los 8 frames del mensaje de ejemplo pasan CRC ahora, y el texto se reconstruye carácter por carácter exactamente igual al original.
+
+Loop continuo + tecla R:
+
+main_tx.py: el ciclo preámbulo→datos→repetición→fin se extrajo a send_cycle(), ejecutado dentro de un while True que lo repite indefinidamente ("constantemente"). R aborta el ciclo actual y reinicia desde el preámbulo; Q sale del programa.
+main_rx.py: se agregó reset_state(); tras reconstruir el mensaje (por frame de fin o por timeout) el receptor vuelve automáticamente a WAITING listo para el siguiente ciclo. R fuerza ese mismo reinicio en cualquier momento.
+Nota: si se pierde un frame intermedio (no el último), el byte terminador hace que bits_to_text corte el texto justo ahí en vez de seguir con ?, así que el mensaje se ve truncado en ese punto pero sin basura — es un compromiso razonable frente al bug original (pérdida garantizada del último frame).
+
+No pude probar el flujo end-to-end con cámara/pantalla real (no disponibles en este entorno), así que valdría la pena correr main_tx.py/main_rx.py juntos para confirmar el comportamiento visual y las teclas R/Q/ESPACIO/D.

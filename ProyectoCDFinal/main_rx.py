@@ -8,11 +8,15 @@ import time
 from receptor.capture import find_fiducials_robust, rectify_frame, extract_symbols
 from receptor.decoder import calibrate_threshold, symbols_to_bits_ook, \
                              manchester_decode, bits_to_text
-from common.protocol import parse_packet
+from common.protocol import parse_packet, payload_capacity
+from transmisor.frame_builder import cells_capacity
 from common.config import *
 
 # Timeout: si no llega un frame nuevo en X segundos, terminar igual
 TIMEOUT_SECONDS = 3.0
+
+# Bits de payload por frame (igual calculo que usa el transmisor)
+PAYLOAD_BITS = payload_capacity(cells_capacity())
 
 
 def decode_frame(gray, corners, bgr=None):
@@ -52,7 +56,7 @@ def receive():
 
     print("Receptor multi-frame iniciado.")
     print("Esperando preámbulo del transmisor...")
-    print("[D] debug  [Q] salir\n")
+    print("[D] debug  [R] reiniciar  [Q] salir\n")
 
     state        = "WAITING"
     received     = {}
@@ -61,6 +65,16 @@ def receive():
     start_time   = None
     last_rx_time = None   # último momento en que llegó un frame válido
     debug_mode   = False
+
+    def reset_state():
+        nonlocal state, received, total_frames, crc_errors
+        nonlocal start_time, last_rx_time
+        state        = "WAITING"
+        received     = {}
+        total_frames = None
+        crc_errors   = 0
+        start_time   = None
+        last_rx_time = None
 
     while True:
         ret, frame = cap.read()
@@ -77,7 +91,6 @@ def receive():
             "WAITING":   (0, 0,   255),
             "SYNCED":    (0, 165, 255),
             "RECEIVING": (0, 255,   0),
-            "DONE":      (255, 255,  0),
         }.get(state, (255, 255, 255))
 
         cv2.putText(display, f"Estado: {state}", (10, 30),
@@ -117,6 +130,10 @@ def receive():
         elif key == ord('d'):
             debug_mode = not debug_mode
             print(f"Debug: {'ON' if debug_mode else 'OFF'}")
+        elif key == ord('r'):
+            print("\n↺ Reinicio manual — volviendo a esperar preámbulo")
+            reset_state()
+            continue
 
         # ── Timeout: terminar si no llegan frames nuevos ─────
         if (state == "RECEIVING" and
@@ -125,12 +142,12 @@ def receive():
             print(f"\n⚠ Timeout ({TIMEOUT_SECONDS}s sin frames nuevos)")
             print(f"  Frames recibidos: {len(received)}/{total_frames}")
             elapsed = time.time() - start_time if start_time else 0
-            state   = "DONE"
             _reconstruct(received, total_frames, elapsed)
+            reset_state()
             continue
 
         # ── Máquina de estados ───────────────────────────────
-        if corners is None or state == "DONE":
+        if corners is None:
             continue
 
         symbols, threshold = decode_frame(gray, corners, bgr=frame)
@@ -149,10 +166,10 @@ def receive():
 
         if state == "RECEIVING":
             if is_end_frame(symbols, threshold):
-                state   = "DONE"
                 elapsed = time.time() - start_time if start_time else 0
                 print(f"\n✓ Frame de fin detectado ({elapsed:.2f}s)")
                 _reconstruct(received, total_frames, elapsed)
+                reset_state()
 
             else:
                 result = parse_packet(symbols, threshold)
@@ -194,7 +211,7 @@ def _reconstruct(received: dict, total_frames: int, elapsed: float):
             all_bits.extend(received[seq])
         else:
             print(f"  ⚠ Frame {seq} faltante — rellenando con ceros")
-            all_bits.extend([0] * 8)
+            all_bits.extend([0] * PAYLOAD_BITS)
 
     all_bits = np.array(all_bits, dtype=np.uint8)
     text     = bits_to_text(all_bits)
@@ -204,6 +221,7 @@ def _reconstruct(received: dict, total_frames: int, elapsed: float):
     print(text)
     print(f"{'='*50}")
     print(f"Tiempo           : {elapsed:.2f}s")
+
 
     with open("mensaje_recibido.txt", "w", encoding="utf-8") as f:
         f.write(text)

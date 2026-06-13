@@ -66,6 +66,8 @@ def bits_to_text(bits: np.ndarray) -> str:
         byte_val = 0
         for b in byte_bits:
             byte_val = (byte_val << 1) | int(b)
+        if byte_val == 0:  # byte nulo = terminador de mensaje
+            break
         if 32 <= byte_val <= 126:  # solo ASCII imprimible
             text.append(chr(byte_val))
         else:

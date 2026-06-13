@@ -11,6 +11,13 @@ Cada frame de datos tiene este layout en las celdas de datos:
 """
 import numpy as np
 
+HEADER_SYMS = 80  # 5 bytes (40 bits) -> 80 simbolos Manchester
+
+
+def payload_capacity(total_cells: int) -> int:
+    """Bits de payload por frame, dado el numero de celdas de datos."""
+    return (total_cells - HEADER_SYMS) // 2
+
 
 def crc8(data: np.ndarray) -> int:
     """CRC-8 simple para detección de errores por frame."""
