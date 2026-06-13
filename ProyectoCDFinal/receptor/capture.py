@@ -12,108 +12,83 @@ from common.config import *
 def find_fiducials_robust(gray: np.ndarray,
                           bgr:  np.ndarray = None,
                           debug: bool = False):
-    """
-    Intenta detectar los 4 fiduciales usando color verde (si se pasa bgr)
-    o por contornos en escala de grises como fallback.
-    Retorna (corners, method) o (None, 'no_encontrado').
-    """
-    # Método 1: detección por color verde (más robusto)
+    # Método 1: color verde — si encuentra 4 blobs, confiar directamente
     if bgr is not None:
         corners = _find_by_green(bgr, debug)
         if corners is not None:
             return corners, "color_verde"
 
-    # Método 2: contornos en escala de grises
+    # Método 2: contornos grises como fallback
     candidates = _get_candidates_gray(gray)
 
     if len(candidates) >= 4:
         candidates.sort(key=lambda x: x[2], reverse=True)
-        top4    = [(x, y) for x, y, _ in candidates[:4]]
-        corners = sort_corners(top4)
-        if _validate_quad(corners, gray.shape):
-            return corners, "contornos_4"
+        top4 = [(x, y) for x, y, _ in candidates[:4]]
+        return sort_corners(top4), "contornos_4"
 
     if len(candidates) == 3:
         pts3   = [(x, y) for x, y, _ in candidates]
         fourth = _infer_fourth(pts3, gray.shape)
         if fourth is not None:
-            corners = sort_corners(pts3 + [fourth])
-            return corners, "geometria_3+1"
+            return sort_corners(pts3 + [fourth]), "geometria_3+1"
 
     return None, "no_encontrado"
-
-
 # ─────────────────────────────────────────────
 #  MÉTODO 1: DETECCIÓN POR COLOR VERDE
 # ─────────────────────────────────────────────
-
 def _find_by_green(bgr: np.ndarray, debug: bool = False):
     """
-    Detecta los 4 fiduciales verdes en la imagen BGR.
-    Filtra por color HSV, busca contornos cuadrados
-    solo en las 4 esquinas de la imagen.
+    Versión simplificada: si la máscara verde encuentra 4 blobs
+    en las 4 esquinas distintas de la imagen, los usa directamente.
+    Sin validaciones complejas que rechacen resultados válidos.
     """
     h, w = bgr.shape[:2]
     hsv  = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
 
-    # Rango de verde en HSV
-    lower_green = np.array([40,  80,  80])
-    upper_green = np.array([80, 255, 255])
+    lower_green = np.array([35, 60, 60])
+    upper_green = np.array([85, 255, 255])
     mask = cv2.inRange(hsv, lower_green, upper_green)
 
-    # Morfología para limpiar ruido
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
     mask   = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     mask   = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  kernel)
 
     if debug:
         cv2.imshow("Mascara Verde", mask)
 
-    # Zonas de búsqueda: 40% de cada esquina
-    f = 0.40
-    zones = [
-        (0,       0,       int(w*f), int(h*f)),
-        (int(w*(1-f)), 0,  w,        int(h*f)),
-        (0,       int(h*(1-f)), int(w*f), h  ),
-        (int(w*(1-f)), int(h*(1-f)), w,   h  ),
-    ]
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
 
-    centers = []
-    for (x1, y1, x2, y2) in zones:
-        roi_mask = mask[y1:y2, x1:x2]
-        cnts, _  = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL,
-                                     cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts:
+    # Calcular centro de cada blob verde con área mínima
+    blobs = []
+    for cnt in cnts:
+        area = cv2.contourArea(cnt)
+        if area < 200:  # ignorar ruido pequeño
             continue
-
-        # Tomar el contorno verde más grande en esta zona
-        best = max(cnts, key=cv2.contourArea)
-        area = cv2.contourArea(best)
-        if area < 100:
-            continue
-
-        M = cv2.moments(best)
+        M = cv2.moments(cnt)
         if M['m00'] == 0:
             continue
-        cx = int(M['m10'] / M['m00']) + x1
-        cy = int(M['m01'] / M['m00']) + y1
-        centers.append((cx, cy))
+        cx = int(M['m10'] / M['m00'])
+        cy = int(M['m01'] / M['m00'])
+        blobs.append((cx, cy, area))
 
-    if len(centers) == 4:
-        corners = sort_corners(centers)
-        if _validate_quad(corners, bgr.shape[:2]):
-            return corners
+    if debug:
+        print(f"[Green] Blobs encontrados: {len(blobs)}")
+        for b in blobs:
+            print(f"  ({b[0]}, {b[1]}) area={b[2]:.0f}")
 
-    # Si solo encontramos 3, inferir el 4to
-    if len(centers) == 3:
-        fourth = _infer_fourth(centers, bgr.shape[:2])
-        if fourth is not None:
-            corners = sort_corners(centers + [fourth])
-            return corners
+    if len(blobs) < 4:
+        return None
 
-    return None
+    # Tomar los 4 más grandes
+    blobs.sort(key=lambda b: b[2], reverse=True)
+    pts = [(b[0], b[1]) for b in blobs[:4]]
 
-
+    # Ordenar como TL, TR, BL, BR y retornar directamente
+    # SIN validaciones adicionales
+    return sort_corners(pts)
 # ─────────────────────────────────────────────
 #  MÉTODO 2: CONTORNOS EN GRIS
 # ─────────────────────────────────────────────

@@ -1,7 +1,6 @@
 """
 Transmisor multi-frame.
 Ejecutar: python main_tx.py
-Ajusta FRAME_DURATION en common/config.py para cambiar velocidad.
 """
 import cv2
 import numpy as np
@@ -28,10 +27,10 @@ def build_end_frame() -> np.ndarray:
 
 
 def text_to_frames(text: str):
-    data_cells            = get_data_cells()
-    total_cells           = len(data_cells)
-    header_syms           = 80
-    payload_syms          = total_cells - header_syms
+    data_cells             = get_data_cells()
+    total_cells            = len(data_cells)
+    header_syms            = 80
+    payload_syms           = total_cells - header_syms
     payload_bits_per_frame = payload_syms // 2
 
     all_bits = text_to_bits(text)
@@ -44,9 +43,7 @@ def text_to_frames(text: str):
 
     total = len(chunks)
     print(f"Frames necesarios: {total}")
-    print(f"FRAME_DURATION   : {FRAME_DURATION}s")
-    print(f"Tiempo estimado  : {total * FRAME_DURATION:.2f}s  "
-          f"(solo datos, sin preámbulo)")
+    print(f"Tiempo estimado  : {total * FRAME_DURATION:.2f}s")
 
     frames = []
     for seq, chunk in enumerate(chunks):
@@ -61,7 +58,8 @@ def text_to_frames(text: str):
 
 def show_frame(frame_bgr, screen_w, screen_h):
     scale  = min(screen_w / FRAME_W, screen_h / FRAME_H)
-    new_w, new_h = int(FRAME_W * scale), int(FRAME_H * scale)
+    new_w  = int(FRAME_W * scale)
+    new_h  = int(FRAME_H * scale)
     scaled = cv2.resize(frame_bgr, (new_w, new_h),
                         interpolation=cv2.INTER_NEAREST)
     canvas = np.zeros((screen_h, screen_w, 3), dtype=np.uint8)
@@ -80,13 +78,12 @@ def transmit(text: str):
                           cv2.WINDOW_FULLSCREEN)
 
     print("\nPreparando frames...")
-    data_frames   = text_to_frames(text)
-    preamble      = build_preamble_frame()
-    end_frame     = build_end_frame()
+    data_frames = text_to_frames(text)
+    preamble    = build_preamble_frame()
+    end_frame   = build_end_frame()
 
-    # Esperar ESPACIO para iniciar — muestra preámbulo mientras tanto
     print("\nPreámbulo activo. Alinea la cámara del receptor.")
-    print("[ESPACIO] iniciar transmisión  |  [Q] cancelar\n")
+    print("[ESPACIO] iniciar  |  [Q] cancelar\n")
 
     while True:
         show_frame(preamble, screen_w, screen_h)
@@ -97,14 +94,14 @@ def transmit(text: str):
             cv2.destroyAllWindows()
             return
 
-    # Preámbulo de sincronización (no cuenta en el tiempo)
+    # Preámbulo de sincronización
     print("Enviando preámbulo...")
     for i in range(PREAMBLE_FRAMES):
         show_frame(preamble, screen_w, screen_h)
         time.sleep(FRAME_DURATION)
         print(f"  Preámbulo {i+1}/{PREAMBLE_FRAMES}")
 
-    # ── Tiempo inicia aquí ──────────────────────────────────────────
+    # ── Tiempo inicia aquí ──
     start = time.time()
 
     # Frames de datos
@@ -114,23 +111,26 @@ def transmit(text: str):
         time.sleep(FRAME_DURATION)
         print(f"  ▶ Frame {seq+1}/{len(data_frames)}")
 
-    # Repetir último frame (seguridad)
-    show_frame(data_frames[-1], screen_w, screen_h)
-    time.sleep(FRAME_DURATION)
-    print(f"  ▶ Frame {len(data_frames)}/{len(data_frames)} (repetición)")
+    # Repetir últimos 2 frames 3 veces para asegurar recepción
+    print("  Repitiendo últimos frames...")
+    for frame in data_frames[-2:]:
+        for _ in range(3):
+            show_frame(frame, screen_w, screen_h)
+            time.sleep(FRAME_DURATION)
 
-    # Frames de fin
-    print("Enviando fin...")
-    for _ in range(3):
+    # Pausa antes del fin
+    time.sleep(FRAME_DURATION * 2)
+
+    # Frame de fin — muchas repeticiones
+    print("  Enviando fin...")
+    for _ in range(6):
         show_frame(end_frame, screen_w, screen_h)
         time.sleep(FRAME_DURATION)
 
     elapsed = time.time() - start
-    # ── Tiempo termina aquí ─────────────────────────────────────────
-
     print(f"\n{'='*40}")
     print(f"Transmisión completada")
-    print(f"Frames de datos : {len(data_frames)}")
+    print(f"Frames          : {len(data_frames)}")
     print(f"Tiempo (datos)  : {elapsed:.2f}s")
     print(f"Throughput      : {len(text)*8/elapsed:.0f} bps")
     print(f"{'='*40}")
