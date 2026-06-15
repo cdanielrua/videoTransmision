@@ -68,11 +68,11 @@ def receive():
                         (10, display.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
 
-        # Mostrar countdown del timeout (solo si falta más de 1 frame)
+        # Mostrar countdown del timeout (solo si falta al menos 1 frame)
         if rx.state == "RECEIVING" and rx.last_rx_time is not None:
             missing = (rx.total_frames - len(rx.received)
                       if rx.total_frames is not None else None)
-            if missing is not None and missing > 1:
+            if missing is not None and missing >= 1:
                 remaining = TIMEOUT_SECONDS - (time.time() - rx.last_rx_time)
                 if remaining > 0:
                     cv2.putText(display,

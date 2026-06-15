@@ -177,7 +177,7 @@ class Receiver:
             return False
 
         missing = self.total_frames - len(self.received)
-        if missing <= 1:
+        if missing <= 0:
             return False
 
         if time.time() - self.last_rx_time <= TIMEOUT_SECONDS:
