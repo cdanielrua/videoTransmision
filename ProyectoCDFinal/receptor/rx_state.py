@@ -41,7 +41,7 @@ def is_preamble(symbols, threshold):
     return np.mean(bits == expected) > 0.85
 
 
-def is_end_frame(symbols, threshold):
+def is_end_frame(symbols):
     return np.mean(np.abs(symbols.astype(int) - 128) < 40) > 0.80
 
 
@@ -135,7 +135,7 @@ class Receiver:
             elapsed_rx  = (time.time() - self.start_time
                            if self.start_time is not None else 0.0)
             end_guard   = elapsed_rx >= min_tx_time
-            if is_end_frame(symbols, threshold) and end_guard:
+            if is_end_frame(symbols) and end_guard:
                 elapsed = (time.time() - self.start_time
                           if self.start_time else 0)
                 print(f"\n✓ Frame de fin detectado ({elapsed:.2f}s)")
@@ -145,7 +145,16 @@ class Receiver:
             result = parse_packet(symbols, threshold)
             if result is not None:
                 seq, total, payload, crc_ok = result
-                self.total_frames = total
+
+                # El CRC protege el payload, no el header. Si el header llega
+                # corrupto, total puede ser 0 o un valor sin sentido. Solo
+                # actualizamos total_frames si el valor es positivo Y o bien
+                # no teníamos uno todavía, o el packet pasó CRC (header fiable).
+                if total > 0:
+                    if self.total_frames is None:
+                        self.total_frames = total
+                    elif crc_ok:
+                        self.total_frames = total
 
                 if self.start_time is None:
                     self.start_time   = time.time()
@@ -158,13 +167,15 @@ class Receiver:
                 elif seq not in self.received:
                     self.received[seq] = payload
                     self.last_rx_time = time.time()
-                    print(f"  ✓ Frame {seq+1}/{total} "
+                    print(f"  ✓ Frame {seq+1}/{self.total_frames} "
                           f"({len(payload)} bits)")
 
-                # Si ya tenemos todos los frames, terminar de inmediato:
-                # no es necesario esperar el tiempo de gracia ni la
-                # trama de fin.
-                if len(self.received) >= self.total_frames:
+                # Terminar solo si recibimos todos los frames esperados y el
+                # total conocido es válido (> 0 protege contra headers corruptos
+                # que hayan puesto total_frames = 0).
+                if (self.total_frames is not None and
+                        self.total_frames > 0 and
+                        len(self.received) >= self.total_frames):
                     elapsed = time.time() - self.start_time
                     print(f"\n✓ Todos los frames recibidos ({elapsed:.2f}s)")
                     self._finish(elapsed)
