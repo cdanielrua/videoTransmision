@@ -126,11 +126,15 @@ class Receiver:
                 return False
 
         if self.state == self.RECEIVING:
-            # Solo aceptar frame de fin si ya se recibió al menos un frame válido
-            # y estamos cerca del final esperado, para evitar que un frame
-            # desenfocado (símbolos ~128) dispare el fin prematuramente.
-            end_guard = (self.total_frames is not None and
-                         len(self.received) >= max(1, self.total_frames - 1))
+            # Aceptar frame de fin solo cuando ya ha transcurrido el tiempo
+            # mínimo para que el transmisor haya enviado todos los frames.
+            # Esto evita que un frame desenfocado (símbolos ~128) lo dispare
+            # prematuramente, pero permite terminación aunque falten frames.
+            min_tx_time = (self.total_frames * FRAME_DURATION
+                           if self.total_frames is not None else float('inf'))
+            elapsed_rx  = (time.time() - self.start_time
+                           if self.start_time is not None else 0.0)
+            end_guard   = elapsed_rx >= min_tx_time
             if is_end_frame(symbols, threshold) and end_guard:
                 elapsed = (time.time() - self.start_time
                           if self.start_time else 0)
