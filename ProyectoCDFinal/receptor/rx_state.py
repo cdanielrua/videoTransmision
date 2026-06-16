@@ -121,11 +121,17 @@ class Receiver:
             if not is_preamble(symbols, threshold):
                 print("✓ Inicio de datos detectado")
                 self.state = self.RECEIVING
+                self.last_rx_time = time.time()  # arranca el reloj de timeout desde ya
             else:
                 return False
 
         if self.state == self.RECEIVING:
-            if is_end_frame(symbols, threshold):
+            # Solo aceptar frame de fin si ya se recibió al menos un frame válido
+            # y estamos cerca del final esperado, para evitar que un frame
+            # desenfocado (símbolos ~128) dispare el fin prematuramente.
+            end_guard = (self.total_frames is not None and
+                         len(self.received) >= max(1, self.total_frames - 1))
+            if is_end_frame(symbols, threshold) and end_guard:
                 elapsed = (time.time() - self.start_time
                           if self.start_time else 0)
                 print(f"\n✓ Frame de fin detectado ({elapsed:.2f}s)")
@@ -163,27 +169,20 @@ class Receiver:
         return False
 
     def check_timeout(self) -> bool:
-        """
-        Aborta la recepción si pasan TIMEOUT_SECONDS sin frames nuevos,
-        pero solo mientras falte más de un frame por recibir. Cuando
-        únicamente falta el último frame, este tiempo de gracia no
-        aplica: la recepción solo termina al completarse (ver process)
-        o al detectarse la trama de fin, garantizando su correcta
-        recepción.
-        """
-        if (self.state != self.RECEIVING or
-                self.last_rx_time is None or
-                self.total_frames is None):
+        """Aborta la recepción si pasan TIMEOUT_SECONDS sin frames nuevos.
+        Aplica en cualquier momento dentro de RECEIVING, incluso si aún no se
+        ha parseado ningún frame (total_frames puede ser None)."""
+        if self.state != self.RECEIVING or self.last_rx_time is None:
             return False
 
-        missing = self.total_frames - len(self.received)
-        if missing <= 0:
+        if (self.total_frames is not None and
+                self.total_frames - len(self.received) <= 0):
             return False
 
         if time.time() - self.last_rx_time <= TIMEOUT_SECONDS:
             return False
 
-        elapsed = time.time() - self.start_time
+        elapsed = time.time() - (self.start_time or self.last_rx_time)
         self._finish(elapsed)
         return True
 
